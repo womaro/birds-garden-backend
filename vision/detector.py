@@ -1,14 +1,14 @@
 """
 birds.garden — vision detector (YOLOv8).
 
-Detekcja WSZYSTKICH ptaków w klatce: dla każdego (do MAX_CROPS, posortowane
-po confidence) zapisuje osobny crop i — jeśli jest klasyfikator — rozpoznaje
-gatunek. main.py tworzy jeden wiersz detekcji na ptaka. Dzięki temu mieszane
-stado (np. wróble + jeden dzwoniec) daje osobne gatunki, a klasyfikator dostaje
-osobną próbkę na każdego ptaka.
+Dla każdego wykrytego ptaka (do MAX_CROPS, posortowane po confidence):
+  • zapisuje SZEROKI, kwadratowy kadr z kontekstem  → zdjęcie na kartę (photo_path),
+  • do klasyfikatora podaje CIASNY crop po bounding boxie → lepsze rozpoznanie
+    (klasyfikator chce ptaka wypełniającego kadr, tło mu szkodzi).
+main.py tworzy jeden wiersz detekcji na ptaka.
 
-`crop_best()` (jeden, najpewniejszy ptak) zostaje — używa go build_dataset.py
-do wycinania ze zdjęć z neta (tam jedno zdjęcie = jeden ptak).
+`crop_best()` (jeden, najpewniejszy ptak, CIASNY) zostaje — używa go build_dataset.py.
+Dzięki temu trening (ciasne cropy) jest spójny z wejściem klasyfikatora przy inferencji.
 """
 
 import io
@@ -68,10 +68,11 @@ class BirdDetector:
         birds = self._birds(img)
 
         out = []
-        for b in birds[: self.max_crops]:          # crop na każdego ptaka, do limitu
-            crop = self._crop(img, b["bbox"])
-            photo_path = self._save_crop(crop)
-            species, sconf = self._classify(crop)
+        for b in birds[: self.max_crops]:
+            wide = self._crop(img, b["bbox"])             # szeroki kadr → karta
+            photo_path = self._save_crop(wide)
+            tight = self._crop_tight(img, b["bbox"])      # ciasny → klasyfikator
+            species, sconf = self._classify(tight)
             out.append({
                 "confidence": b["confidence"],
                 "bbox": b["bbox"],
@@ -82,19 +83,34 @@ class BirdDetector:
 
         return {
             "detected": bool(out),
-            "count": len(birds),    # ile ptaków wykryto łącznie
-            "saved": len(out),      # ile cropów zapisano (ograniczone max_crops)
-            "birds": out,           # lista per-ptak, każdy z własnym cropem
+            "count": len(birds),
+            "saved": len(out),
+            "birds": out,
         }
 
     def crop_best(self, image_bytes: bytes) -> Optional[Image.Image]:
-        """Najpewniejszy ptak wycięty z klatki — dla build_dataset.py (zdjęcia z neta)."""
+        """Najpewniejszy ptak, CIASNY crop — dla build_dataset.py (spójny z klasyfikatorem)."""
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         birds = self._birds(img)
-        return self._crop(img, birds[0]["bbox"]) if birds else None
+        return self._crop_tight(img, birds[0]["bbox"]) if birds else None
 
     @staticmethod
-    def _crop(img: Image.Image, bbox, pad: float = 0.12) -> Image.Image:
+    def _crop(img: Image.Image, bbox, context: float = 1.9, min_side: int = 80) -> Image.Image:
+        """Szeroki, kwadratowy kadr wyśrodkowany na ptaku — na kartę (cały ptak + margines)."""
+        w, h = img.size
+        x1, y1, x2, y2 = bbox
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        side = max(max(x2 - x1, y2 - y1) * context, float(min_side))
+        half = side / 2
+        left   = max(0, int(cx - half))
+        top    = max(0, int(cy - half))
+        right  = min(w, int(cx + half))
+        bottom = min(h, int(cy + half))
+        return img.crop((left, top, right, bottom))
+
+    @staticmethod
+    def _crop_tight(img: Image.Image, bbox, pad: float = 0.12) -> Image.Image:
+        """Ciasny crop po bounding boxie — wejście klasyfikatora / dane treningowe."""
         w, h = img.size
         x1, y1, x2, y2 = bbox
         bw, bh = x2 - x1, y2 - y1
