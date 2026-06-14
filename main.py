@@ -3,6 +3,11 @@ from psycopg2.extras import RealDictCursor
 import psycopg2
 from datetime import datetime, date, timezone, timedelta
 import os, uuid, json
+import httpx
+from pydantic import BaseModel
+
+YOLO_URL = f"http://{os.getenv('YOLO_HOST','127.0.0.1')}:{os.getenv('YOLO_PORT','8002')}"
+PHOTOS_BASE_URL = os.getenv("PHOTOS_BASE_URL", "https://birds.garden/photos")
 
 import anthropic
 from birdnetlib import Recording
@@ -527,7 +532,45 @@ async def receive_audio(
 async def receive_snapshot(
     file: UploadFile = File(...), _: str = Depends(verify_key)
 ):
-    return {"status": "coming_soon", "note": "YOLOv8 will run as separate service"}
+    data = await file.read()
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{YOLO_URL}/detect",
+            files={"file": ("frame.jpg", data, "image/jpeg")},
+        )
+    resp.raise_for_status()
+    r = resp.json()
+    if not r["detected"]:
+        return {"detected": False}
+    conn = get_db()
+    cur = conn.cursor()
+    birds = []
+    for b in r["birds"]:                      # jeden wiersz na ptaka
+        cur.execute(
+            "INSERT INTO detections (timestamp, species, confidence, type, "
+            "photo_path, species_confidence) "
+            "VALUES (NOW(), %s, %s, 'vision', %s, %s) RETURNING id",
+            (b.get("species"), b["confidence"], b["photo_path"],
+             b.get("species_confidence")),
+        )
+        det_id = cur.fetchone()[0]
+        birds.append({
+            "id": det_id,
+            "confidence": b["confidence"],
+            "species": b.get("species"),
+            "species_confidence": b.get("species_confidence"),
+            "photo_url": (f"{PHOTOS_BASE_URL}/{b['photo_path']}"
+                          if b.get("photo_path") else None),
+        })
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {
+        "detected": True,
+        "count": r["count"],   # ptaków wykrytych łącznie
+        "saved": r["saved"],   # cropów/wierszy zapisanych (limit MAX_CROPS)
+        "birds": birds,
+    }
 
 
 # ── Detections ─────────────────────────────────────────────────────────────
@@ -537,7 +580,8 @@ def get_detections(limit: int = 50, _: str = Depends(verify_key)):
     conn = get_db()
     cur  = conn.cursor()
     cur.execute(
-        "SELECT id, timestamp, species, confidence, type "
+        "SELECT id, timestamp, species, confidence, type, "
+        "photo_path, species_confidence, verified_species "
         "FROM detections ORDER BY timestamp DESC LIMIT %s",
         (limit,),
     )
@@ -551,9 +595,37 @@ def get_detections(limit: int = 50, _: str = Depends(verify_key)):
             "species": r[2],
             "confidence": r[3],
             "type": r[4],
+            "photo_path": r[5],
+            "species_confidence": r[6],
+            "verified_species": r[7],
+            "photo_url": f"{PHOTOS_BASE_URL}/{r[5]}" if r[5] else None,
         }
         for r in rows
     ]
+
+
+# ── Label correction (flywheel) ────────────────────────────────────────────
+
+class LabelIn(BaseModel):
+    species: str
+
+
+@app.post("/detections/{det_id}/label")
+def label_detection(det_id: int, body: LabelIn, _: str = Depends(verify_key)):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE detections SET species=%s, verified_species=%s, "
+        "verified_at=NOW() WHERE id=%s RETURNING id",
+        (body.species, body.species, det_id),
+    )
+    row = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    if not row:
+        raise HTTPException(404, "detection not found")
+    return {"ok": True, "id": det_id, "species": body.species}
 
 
 # ── Species list ───────────────────────────────────────────────────────────

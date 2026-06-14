@@ -1,0 +1,16 @@
+[Unit]
+Description=birds.garden YOLOv8 vision service
+After=network.target
+# Wisi obok bird-api, nie blokuje go (osobny proces = brak SEGFAULT TF/PyTorch)
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/bird-api
+# TEN SAM plik env co bird-api → jedno źródło prawdy, rotacja w jednym miejscu
+EnvironmentFile=/opt/bird-api/.env
+ExecStart=/opt/bird-env/bin/uvicorn vision.yolo_service:app --host 127.0.0.1 --port 8002
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
