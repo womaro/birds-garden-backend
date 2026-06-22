@@ -2,7 +2,7 @@
 """
 birds.garden — trening klasyfikatora gatunku (YOLOv8-cls).
 
-    python tools/train_classifier.py --data dataset --epochs 40
+    python tools/train_classifier.py --data dataset --epochs 40 --device cpu
 
 Po treningu najlepsze wagi lądują w:
     runs/classify/<name>/weights/best.pt
@@ -30,6 +30,7 @@ def main():
     ap.add_argument("--imgsz", type=int, default=224)
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--name", default="birds_cls")
+    ap.add_argument("--device", default="", help="np. cpu, mps, 0; puste = auto")
     args = ap.parse_args()
 
     from ultralytics import YOLO  # ciężki import — dopiero tutaj
@@ -41,6 +42,7 @@ def main():
         imgsz=args.imgsz,
         batch=args.batch,
         name=args.name,
+        device=args.device or None,
     )
     print(f"\nWagi: runs/classify/{args.name}/weights/best.pt")
     print("Wpięcie: SPECIES_MODEL=.../best.pt w /opt/bird-api/.env → restart bird-yolo")
