@@ -44,7 +44,7 @@ class BirdDetector:
 
     def _birds(self, img: Image.Image):
         out = []
-        for r in self.model.predict(img, verbose=False):
+        for r in self.model.predict(img, imgsz=1280, verbose=False):
             for box in r.boxes:
                 name = self.names.get(int(box.cls[0]), "")
                 conf = float(box.conf[0])
