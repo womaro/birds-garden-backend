@@ -8,3 +8,12 @@ raw/
 dataset/
 own/
 *.tgzrecordings/
+
+# dodane 2026-07-21
+.venv/
+venv/
+datasets/
+runs/
+*.bak
+*.bak2
+.DS_Store
