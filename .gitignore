@@ -7,7 +7,8 @@ models/
 raw/
 dataset/
 own/
-*.tgzrecordings/
+*.tgz
+recordings/
 
 # dodane 2026-07-21
 .venv/
